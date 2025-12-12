@@ -1,3 +1,4 @@
+// src/anna/memory.ts
 export type MemoryType = "user" | "project" | "preference";
 export type Confidence = "high" | "medium";
 
@@ -23,7 +24,7 @@ const LS = {
   memoryItems: "anna.memoryItems",
 } as const;
 
-// ✅ FESTE BACKEND-URL (Render)
+// ✅ feste Backend URL (Render)
 const API_BASE = "https://anna-app-6aw4.onrender.com";
 
 function nowIso() {
@@ -49,10 +50,17 @@ function writeJson(key: string, value: any) {
 
 export function getOrCreateSessionId(): string {
   const v = localStorage.getItem(LS.sessionId);
-  if (v) return v;
+  if (v && v.trim()) return v;
   const sid = randomId("sess");
   localStorage.setItem(LS.sessionId, sid);
   return sid;
+}
+
+export function loadMemory(): MemoryBlob {
+  const memoryId = localStorage.getItem(LS.memoryId) || "unknown";
+  const version = Number(localStorage.getItem(LS.memoryVersion) || "1");
+  const items = readJson<MemoryItem[]>(LS.memoryItems, []);
+  return { memoryId, version, items, updatedAt: nowIso() };
 }
 
 function cacheMemory(mem: MemoryBlob) {
@@ -61,7 +69,7 @@ function cacheMemory(mem: MemoryBlob) {
   writeJson(LS.memoryItems, mem.items);
 }
 
-async function api<T>(path: string, method = "GET", body?: any): Promise<T> {
+async function api<T>(path: string, method: "GET" | "POST", body?: any): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method,
     headers: { "Content-Type": "application/json" },
@@ -69,19 +77,21 @@ async function api<T>(path: string, method = "GET", body?: any): Promise<T> {
   });
 
   if (!res.ok) {
-    throw new Error(`${method} ${path} failed`);
+    const txt = await res.text().catch(() => "");
+    throw new Error(`${method} ${path} failed: ${res.status} ${txt}`);
   }
-
-  return res.json();
+  return (await res.json()) as T;
 }
 
 export async function startSessionAndLoadMemory(): Promise<MemoryBlob> {
   const sessionId = getOrCreateSessionId();
 
-  const data = await api<any>("/api/session/start", "POST", {
-    sessionId,
-    ownerHint: "pete",
-  });
+  const data = await api<{
+    sessionId: string;
+    memoryId: string;
+    memoryVersion: number;
+    items: MemoryItem[];
+  }>("/api/session/start", "POST", { sessionId, ownerHint: "pete" });
 
   const mem: MemoryBlob = {
     memoryId: data.memoryId,
@@ -100,17 +110,18 @@ export async function upsertMemoryItems(
   const memoryId = localStorage.getItem(LS.memoryId);
   const baseVersion = Number(localStorage.getItem(LS.memoryVersion) || "1");
 
-  const res = await api<any>("/api/memory/upsert", "POST", {
-    memoryId,
-    baseVersion,
-    patch,
-  });
+  const res = await api<{
+    memoryId: string;
+    memoryVersion: number;
+    items: MemoryItem[];
+    updatedAt: string;
+  }>("/api/memory/upsert", "POST", { memoryId, baseVersion, patch });
 
   const mem: MemoryBlob = {
     memoryId: res.memoryId,
     version: res.memoryVersion,
-    items: res.items,
-    updatedAt: res.updatedAt,
+    items: res.items || [],
+    updatedAt: res.updatedAt || nowIso(),
   };
 
   cacheMemory(mem);
