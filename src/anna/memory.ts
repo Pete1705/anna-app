@@ -1,6 +1,3 @@
-// src/anna/memory.ts
-// Backend-Source-of-Truth + LocalStorage Cache (Hybrid)
-
 export type MemoryType = "user" | "project" | "preference";
 export type Confidence = "high" | "medium";
 
@@ -26,8 +23,20 @@ const LS = {
   memoryItems: "anna.memoryItems",
 } as const;
 
-// Backend base URL (kannst du auch in .env legen)
-const API_BASE = "http://localhost:3001";
+// ✅ HARTE FALLBACK-URL (damit "Failed to fetch" nicht durch localhost passiert)
+const HARDCODED_BACKEND = "https://anna-app-6aw4.onrender.com";
+
+// Vite ENV (Render Static Site kann das als Build-ENV setzen)
+const RAW_ENV_BASE = (import.meta?.env?.VITE_API_BASE as string) || "";
+
+// Normalize (kein trailing slash)
+function normalizeBaseUrl(url: string): string {
+  const u = (url || "").trim();
+  if (!u) return "";
+  return u.endsWith("/") ? u.slice(0, -1) : u;
+}
+
+const API_BASE = normalizeBaseUrl(RAW_ENV_BASE) || HARDCODED_BACKEND;
 
 function nowIso() {
   return new Date().toISOString();
@@ -59,7 +68,6 @@ export function getOrCreateSessionId(): string {
   return sid;
 }
 
-// ---- Cache accessors (LocalStorage) ----
 export function getCachedMemoryId(): string | null {
   const v = localStorage.getItem(LS.memoryId);
   return v && v.trim() ? v : null;
@@ -80,7 +88,6 @@ function cacheMemory(mem: MemoryBlob) {
   writeJson(LS.memoryItems, mem.items);
 }
 
-// ---- Backend API ----
 async function apiPost<T>(path: string, body: any): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
@@ -92,7 +99,6 @@ async function apiPost<T>(path: string, body: any): Promise<T> {
     const txt = await res.text().catch(() => "");
     throw new Error(`POST ${path} failed: ${res.status} ${txt}`);
   }
-
   return (await res.json()) as T;
 }
 
@@ -103,18 +109,9 @@ async function apiGet<T>(path: string): Promise<T> {
     const txt = await res.text().catch(() => "");
     throw new Error(`GET ${path} failed: ${res.status} ${txt}`);
   }
-
   return (await res.json()) as T;
 }
 
-// ---- Public API used by the app ----
-
-/**
- * Startet/Bindet Session im Backend.
- * Lädt Memory (Source of Truth) und cached es.
- *
- * Diese Funktion wird in bootstrap.ts verwendet.
- */
 export async function startSessionAndLoadMemory(): Promise<MemoryBlob> {
   const sessionId = getOrCreateSessionId();
 
@@ -136,11 +133,6 @@ export async function startSessionAndLoadMemory(): Promise<MemoryBlob> {
   return mem;
 }
 
-/**
- * Lädt Memory aus Cache (schnell, offline-freundlich).
- * Für "aktuelles" Memory nutzt du startSessionAndLoadMemory() beim Boot
- * und upsertMemoryItems() beim Speichern.
- */
 export function loadMemory(): MemoryBlob {
   const memoryId = getCachedMemoryId() || "unknown";
   const version = getCachedMemoryVersion();
@@ -148,17 +140,11 @@ export function loadMemory(): MemoryBlob {
   return { memoryId, version, items, updatedAt: nowIso() };
 }
 
-/**
- * Upsert -> Backend, dann Cache aktualisieren.
- */
 export async function upsertMemoryItems(
   patch: Omit<MemoryItem, "lastUpdated">[]
 ): Promise<MemoryBlob> {
   const memoryId = getCachedMemoryId();
-  if (!memoryId) {
-    // Falls Cache leer: Session starten und Memory holen
-    await startSessionAndLoadMemory();
-  }
+  if (!memoryId) await startSessionAndLoadMemory();
 
   const mid = getCachedMemoryId();
   if (!mid) throw new Error("No memoryId available after session start.");
@@ -170,11 +156,7 @@ export async function upsertMemoryItems(
     memoryVersion: number;
     items: MemoryItem[];
     updatedAt: string;
-  }>("/api/memory/upsert", {
-    memoryId: mid,
-    baseVersion,
-    patch,
-  });
+  }>("/api/memory/upsert", { memoryId: mid, baseVersion, patch });
 
   const mem: MemoryBlob = {
     memoryId: res.memoryId,
@@ -211,29 +193,4 @@ export async function fetchMemoryFromBackend(): Promise<MemoryBlob> {
 
 export function resetAnnaStorage(): void {
   Object.values(LS).forEach((k) => localStorage.removeItem(k));
-}
-
-// Convenience helpers (optional)
-export async function rememberPreference(
-  key: string,
-  value: string,
-  confidence: Confidence = "high"
-) {
-  return upsertMemoryItems([{ type: "preference", key, value, confidence }]);
-}
-
-export async function rememberProject(
-  key: string,
-  value: string,
-  confidence: Confidence = "high"
-) {
-  return upsertMemoryItems([{ type: "project", key, value, confidence }]);
-}
-
-export async function rememberUser(
-  key: string,
-  value: string,
-  confidence: Confidence = "high"
-) {
-  return upsertMemoryItems([{ type: "user", key, value, confidence }]);
 }
