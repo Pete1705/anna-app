@@ -1,11 +1,21 @@
 // server/index.js
 import express from "express";
 import cors from "cors";
+import dotenv from "dotenv";
+
+// ENV laden
+dotenv.config();
+
+// 🔍 DEBUG: Prüfen ob DATABASE_URL wirklich ankommt
+console.log(
+  "DATABASE_URL =",
+  process.env.DATABASE_URL ? "SET" : "MISSING"
+);
 
 const app = express();
 app.use(express.json());
 
-// CORS: im Zweifel offen lassen für MVP, aber per ENV einschränkbar
+// CORS
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "*";
 app.use(
   cors({
@@ -14,120 +24,87 @@ app.use(
   })
 );
 
-// ---- In-Memory DB (MVP) ----
-// Achtung: Daten sind weg bei Restart. Für echte Persistenz -> DB (Option 2).
-const memories = new Map(); // memoryId -> { memoryId, version, items, updatedAt }
-const sessions = new Map(); // sessionId -> { sessionId, memoryId, createdAt, lastSeenAt }
+// ---- In-Memory Fallback (nur wenn DB fehlt) ----
+const memories = new Map(); // memoryId -> { items, updatedAt }
+const sessions = new Map(); // sessionId -> { sessionId, memoryId, createdAt }
 
 function nowIso() {
   return new Date().toISOString();
 }
 
 function randomId(prefix) {
-  return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+  return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(
+    16
+  )}`;
 }
 
-function upsertItems(existingItems, patch) {
-  const map = new Map();
-  for (const it of existingItems) map.set(`${it.type}:${it.key}`, it);
+// ---- Health Check ----
+app.get("/health", async (req, res) => {
+  let db = false;
 
-  for (const p of patch) {
-    map.set(`${p.type}:${p.key}`, { ...p, lastUpdated: nowIso() });
+  try {
+    if (process.env.DATABASE_URL) {
+      const { default: pg } = await import("pg");
+      const client = new pg.Client({
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false },
+      });
+      await client.connect();
+      await client.query("SELECT 1");
+      await client.end();
+      db = true;
+    }
+  } catch (e) {
+    console.error("DB health check failed:", e.message);
   }
 
-  return Array.from(map.values());
-}
-
-// Health
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, time: nowIso() });
+  res.json({
+    ok: true,
+    db,
+    time: nowIso(),
+  });
 });
 
-// Session start -> returns memory
-app.post("/api/session/start", (req, res) => {
-  const { sessionId, ownerHint } = req.body || {};
-  if (!sessionId) return res.status(400).json({ error: "sessionId missing" });
+// ---- Minimal API (Memory MVP) ----
+app.post("/memory/load", (req, res) => {
+  const sessionId = req.body.sessionId || randomId("session");
 
   let session = sessions.get(sessionId);
-
   if (!session) {
-    const memoryId = randomId("mem");
-
-    const memory = {
-      memoryId,
-      version: 1,
-      items: [],
-      updatedAt: nowIso(),
-      ownerHint: ownerHint || null,
-    };
-    memories.set(memoryId, memory);
-
+    const memoryId = randomId("memory");
     session = {
       sessionId,
       memoryId,
       createdAt: nowIso(),
-      lastSeenAt: nowIso(),
     };
     sessions.set(sessionId, session);
-  } else {
-    session.lastSeenAt = nowIso();
-    sessions.set(sessionId, session);
+    memories.set(memoryId, { items: [], updatedAt: nowIso() });
   }
 
   const memory = memories.get(session.memoryId);
-
-  return res.json({
+  res.json({
     sessionId: session.sessionId,
-    memoryId: memory.memoryId,
-    memoryVersion: memory.version,
+    memoryId: session.memoryId,
     items: memory.items,
   });
 });
 
-// Memory upsert
-app.post("/api/memory/upsert", (req, res) => {
-  const { memoryId, baseVersion, patch } = req.body || {};
-  if (!memoryId) return res.status(400).json({ error: "memoryId missing" });
-  if (!Array.isArray(patch) || patch.length === 0) {
-    return res.status(400).json({ error: "patch must be non-empty array" });
+app.post("/memory/upsert", (req, res) => {
+  const { memoryId, items = [] } = req.body;
+  if (!memoryId) {
+    return res.status(400).json({ error: "memoryId missing" });
   }
 
-  const mem = memories.get(memoryId);
-  if (!mem) return res.status(404).json({ error: "memory not found" });
+  const memory = memories.get(memoryId) || { items: [], updatedAt: nowIso() };
+  memory.items = items;
+  memory.updatedAt = nowIso();
+  memories.set(memoryId, memory);
 
-  void baseVersion; // MVP: last write wins
-
-  mem.items = upsertItems(mem.items, patch);
-  mem.version += 1;
-  mem.updatedAt = nowIso();
-  memories.set(memoryId, mem);
-
-  return res.json({
-    memoryId: mem.memoryId,
-    memoryVersion: mem.version,
-    items: mem.items,
-    updatedAt: mem.updatedAt,
-  });
+  res.json({ ok: true });
 });
 
-// Memory get
-app.get("/api/memory", (req, res) => {
-  const { memoryId } = req.query;
-  if (!memoryId) return res.status(400).json({ error: "memoryId missing" });
-
-  const mem = memories.get(memoryId);
-  if (!mem) return res.status(404).json({ error: "memory not found" });
-
-  return res.json({
-    memoryId: mem.memoryId,
-    memoryVersion: mem.version,
-    items: mem.items,
-    updatedAt: mem.updatedAt,
-  });
-});
-
-// IMPORTANT: Cloud host setzt PORT via ENV
+// ---- Start Server ----
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`[server] listening on port ${PORT}`);
+  console.log(`ANNA backend running on port ${PORT}`);
 });
