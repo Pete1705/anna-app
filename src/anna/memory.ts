@@ -1,4 +1,5 @@
 // src/anna/memory.ts
+
 export type MemoryType = "preference" | "fact" | "project" | "other";
 
 export type MemoryItem = {
@@ -6,18 +7,21 @@ export type MemoryItem = {
   key: string;
   value: string;
   confidence?: "low" | "medium" | "high" | string;
-  created_at?: string;
 };
 
 export type MemoryState = {
-  memoryId?: string;
   version: number;
   items: MemoryItem[];
 };
 
+/**
+ * Vite injects import.meta.env at build time.
+ * DO NOT use casts or optional chaining here – breaks Render build.
+ */
 const API_BASE =
-  (import.meta as any).env?.VITE_API_BASE?.replace(/\/$/, "") ||
-  ""; // fallback = same-origin (lokal ok, prod braucht ENV)
+  import.meta.env.VITE_API_BASE
+    ? import.meta.env.VITE_API_BASE.replace(/\/$/, "")
+    : "";
 
 function apiUrl(path: string) {
   if (!path.startsWith("/")) path = "/" + path;
@@ -25,32 +29,26 @@ function apiUrl(path: string) {
 }
 
 export async function loadMemory(): Promise<MemoryState> {
-  // Backend liefert { ok:true, items:[...] }
-  const res = await fetch(apiUrl("/api/memory"), {
-    method: "GET",
-    headers: { "Accept": "application/json" },
-  });
+  const res = await fetch(apiUrl("/api/memory"));
 
   if (!res.ok) {
-    const txt = await res.text().catch(() => "");
+    const txt = await res.text();
     throw new Error(`loadMemory failed: ${res.status} ${txt}`);
   }
 
   const data = await res.json();
-  const items = Array.isArray(data?.items) ? data.items : [];
 
   return {
     version: 1,
-    items,
+    items: Array.isArray(data.items) ? data.items : [],
   };
 }
 
-export async function upsertMemoryItems(patch: MemoryItem[]): Promise<void> {
-  // MVP: Wir schicken je Item einen POST (einfach & robust)
-  for (const it of patch) {
+export async function upsertMemoryItems(items: MemoryItem[]) {
+  for (const it of items) {
     const res = await fetch(apiUrl("/api/memory/upsert"), {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         type: it.type,
         key: it.key,
@@ -60,20 +58,17 @@ export async function upsertMemoryItems(patch: MemoryItem[]): Promise<void> {
     });
 
     if (!res.ok) {
-      const txt = await res.text().catch(() => "");
+      const txt = await res.text();
       throw new Error(`upsert failed: ${res.status} ${txt}`);
     }
   }
 }
 
-export async function resetAnnaStorage(): Promise<void> {
-  const res = await fetch(apiUrl("/api/memory/reset"), {
-    method: "POST",
-    headers: { "Accept": "application/json" },
-  });
+export async function resetAnnaStorage() {
+  const res = await fetch(apiUrl("/api/memory/reset"), { method: "POST" });
 
   if (!res.ok) {
-    const txt = await res.text().catch(() => "");
+    const txt = await res.text();
     throw new Error(`reset failed: ${res.status} ${txt}`);
   }
 }
