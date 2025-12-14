@@ -1,10 +1,6 @@
 // src/anna/bootstrap.ts
-
-import {
-  getOrCreateSessionId,
-  loadMemory,
-  rememberPreference,
-} from "./memory";
+import { apiUrl, setStoredSessionId } from "./index";
+import { loadMemory } from "./memory";
 
 export type AnnaBootstrapResult = {
   sessionId: string;
@@ -13,21 +9,33 @@ export type AnnaBootstrapResult = {
 };
 
 export async function bootstrapAnna(): Promise<AnnaBootstrapResult> {
-  const sessionId = getOrCreateSessionId();
-  const mem = await loadMemory();
+  // 1) Backend bootstrap (wenn vorhanden)
+  // Falls du die Route nicht hast, fällt es gleich in den fallback.
+  try {
+    const res = await fetch(apiUrl("/api/bootstrap"), { method: "GET" });
+    const txt = await res.text();
+    if (res.ok) {
+      const data: any = JSON.parse(txt);
+      if (data?.sessionId) setStoredSessionId(data.sessionId);
 
-  // Optional: set defaults on first run only
-  // (first run = version===1 and no items)
-  if (mem.version === 1 && mem.items.length === 0) {
-    await rememberPreference("code_delivery", "Immer vollständigen Code zum Austauschen", "high");
-    await rememberPreference("workflow", "Schritt-für-Schritt Anleitung", "high");
+      // load memory after session established
+      const mem = await loadMemory();
+      return {
+        sessionId: data.sessionId || "—",
+        memoryId: mem.memoryId,
+        memoryVersion: mem.version,
+      };
+    }
+  } catch {
+    // ignore, fallback below
   }
 
-  const latest = await loadMemory();
-
+  // 2) Fallback: wenn kein /api/bootstrap existiert,
+  // versuchen wir wenigstens /api/memory zu laden (setzt aber Session Header voraus).
+  const mem = await loadMemory();
   return {
-    sessionId,
-    memoryId: latest.memoryId,
-    memoryVersion: latest.version,
+    sessionId: "—",
+    memoryId: mem.memoryId,
+    memoryVersion: mem.version,
   };
 }
