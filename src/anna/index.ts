@@ -1,8 +1,13 @@
 // src/anna/index.ts
+
 export { bootstrapAnna } from "./bootstrap";
 export {
   startSessionAndLoadMemory,
+  loadMemory,
   upsertMemoryItems,
   resetAnnaStorage,
-  loadMemory,
+  rememberPreference,
+  getOrCreateSessionId,
 } from "./memory";
+export * from "./commands";
+export * from "./nlpMemory";
