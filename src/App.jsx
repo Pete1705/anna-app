@@ -2,13 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
 import { bootstrapAnna } from "./anna/bootstrap";
-import {
-  loadMemory,
-  upsertMemoryItems,
-  resetAnnaStorage,
-} from "./anna/memory";
-
-// ✅ WICHTIG: richtiger Pfad (KEIN "./anna/anna/...")
+import { loadMemory, upsertMemoryItems, resetAnnaStorage } from "./anna/memory";
 import { suggestMemoryFromText } from "./anna/nlpMemory";
 
 // --- Minimal UI Helpers ---
@@ -24,11 +18,19 @@ export default function App() {
   const [boot, setBoot] = useState(null);
   const [bootError, setBootError] = useState("");
   const [input, setInput] = useState("");
-  const [mem, setMem] = useState(loadMemory());
+
+  // ✅ IMPORTANT: mem is an object, not a Promise
+  const [mem, setMem] = useState({ memoryId: "—", version: 0, items: [] });
+
   const [isBooting, setIsBooting] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const itemsSorted = useMemo(() => sortItems(mem.items || []), [mem.items]);
+
+  async function refreshMemoryOnly() {
+    const m = await loadMemory();
+    setMem(m);
+  }
 
   async function doBoot() {
     setIsBooting(true);
@@ -36,7 +38,10 @@ export default function App() {
     try {
       const res = await bootstrapAnna();
       setBoot(res);
-      setMem(loadMemory());
+
+      // ✅ IMPORTANT: await
+      const m = await loadMemory();
+      setMem(m);
     } catch (e) {
       setBootError(String(e?.message || e));
     } finally {
@@ -52,6 +57,7 @@ export default function App() {
   async function onSend() {
     const text = input.trim();
     if (!text) return;
+
     setInput("");
     setSaving(true);
     setBootError("");
@@ -61,8 +67,8 @@ export default function App() {
       const suggestion = suggestMemoryFromText(text);
 
       if (!suggestion) {
-        // kein Memory erkannt -> nichts speichern, nur UI-Feedback
-        setMem(loadMemory());
+        // kein Memory erkannt -> nur re-load (await!)
+        await refreshMemoryOnly();
         return;
       }
 
@@ -76,7 +82,9 @@ export default function App() {
       ];
 
       await upsertMemoryItems(patch);
-      setMem(loadMemory());
+
+      // ✅ Reload memory after upsert
+      await refreshMemoryOnly();
     } catch (e) {
       setBootError(String(e?.message || e));
     } finally {
@@ -88,13 +96,22 @@ export default function App() {
     await doBoot();
   }
 
-  function onReset() {
-    resetAnnaStorage();
-    setBoot(null);
-    setMem(loadMemory());
+  async function onReset() {
     setBootError("");
+    setSaving(false);
     setInput("");
-    doBoot();
+
+    try {
+      // reset on backend + localStorage (function handles localStorage cleanup)
+      await resetAnnaStorage();
+    } catch (e) {
+      // even if reset fails, we still try to re-boot
+      setBootError(String(e?.message || e));
+    } finally {
+      setBoot(null);
+      setMem({ memoryId: "—", version: 0, items: [] });
+      await doBoot();
+    }
   }
 
   return (
@@ -143,7 +160,7 @@ export default function App() {
           <button onClick={onRefreshBackend} disabled={isBooting}>
             Refresh (Backend)
           </button>
-          <button onClick={onReset} style={{ opacity: 0.9 }}>
+          <button onClick={onReset} style={{ opacity: 0.9 }} disabled={isBooting}>
             Reset (löscht anna.*)
           </button>
         </div>
@@ -168,14 +185,14 @@ export default function App() {
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder='z.B. "merk dir: tone = Schritt-für-Schritt"'
+            placeholder='z.B. "merk dir: preference tone = Schritt-für-Schritt"'
             style={{ flex: 1, padding: 10, borderRadius: 10, border: "1px solid #444" }}
             onKeyDown={(e) => {
               if (e.key === "Enter") onSend();
             }}
           />
           <button onClick={onSend} disabled={saving}>
-            Senden
+            {saving ? "Speichere…" : "Senden"}
           </button>
         </div>
       </div>
