@@ -1,41 +1,31 @@
 // src/anna/bootstrap.ts
-import { apiUrl, setStoredSessionId } from "./index";
+
 import { loadMemory } from "./memory";
 
-export type AnnaBootstrapResult = {
+export type BootstrapResult = {
+  ok: true;
   sessionId: string;
-  memoryId: string;
-  memoryVersion: number;
 };
 
-export async function bootstrapAnna(): Promise<AnnaBootstrapResult> {
-  // 1) Backend bootstrap (wenn vorhanden)
-  // Falls du die Route nicht hast, fällt es gleich in den fallback.
-  try {
-    const res = await fetch(apiUrl("/api/bootstrap"), { method: "GET" });
-    const txt = await res.text();
-    if (res.ok) {
-      const data: any = JSON.parse(txt);
-      if (data?.sessionId) setStoredSessionId(data.sessionId);
+function generateSessionId() {
+  return `sess_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+}
 
-      // load memory after session established
-      const mem = await loadMemory();
-      return {
-        sessionId: data.sessionId || "—",
-        memoryId: mem.memoryId,
-        memoryVersion: mem.version,
-      };
-    }
-  } catch {
-    // ignore, fallback below
-  }
+/**
+ * Bootstrapped ANNA frontend state.
+ * - erzeugt eine Session-ID
+ * - lädt lokalen Memory-Cache
+ * - KEIN Backend-Memory-Zugriff hier
+ */
+export async function bootstrapAnna(): Promise<BootstrapResult> {
+  // Session-ID nur clientseitig
+  const sessionId = generateSessionId();
 
-  // 2) Fallback: wenn kein /api/bootstrap existiert,
-  // versuchen wir wenigstens /api/memory zu laden (setzt aber Session Header voraus).
-  const mem = await loadMemory();
+  // Memory laden (lokal, synchron)
+  loadMemory();
+
   return {
-    sessionId: "—",
-    memoryId: mem.memoryId,
-    memoryVersion: mem.version,
+    ok: true,
+    sessionId,
   };
 }
